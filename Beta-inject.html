@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>EaglercraftX 启动器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #ffffff;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            gap: 20px;
+        }
+        #launch-btn {
+            width: 320px;
+            height: 240px;
+            background: #e0e0e0;
+            border: none;
+            cursor: pointer;
+            position: relative;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+        #launch-btn:hover {
+            transform: scale(1.02);
+            background: #d5d5d5;
+        }
+        #launch-btn::before, #launch-btn::after {
+            content: '';
+            position: absolute;
+            background: #ffffff;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #launch-btn::before {
+            width: 60px;
+            height: 12px;
+        }
+        #launch-btn::after {
+            width: 12px;
+            height: 60px;
+        }
+        .status-message {
+            color: #666666;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            display: none;
+        }
+        .instructions {
+            color: #888;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            text-align: center;
+            max-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <button id="launch-btn"></button>
+    <div class="status-message" id="status"></div>
+    <div class="instructions">
+        点击按钮选择游戏核心 (.js) 或游戏实例 (.zip)<br>
+        实例包应包含 core.js 和 inject.js
+    </div>
+    <input type="file" id="file-input" accept=".js,.zip" style="display: none;">
+
+    <script>
+        const launchBtn = document.getElementById('launch-btn');
+        const fileInput = document.getElementById('file-input');
+        const statusDisplay = document.getElementById('status');
+
+        // 点击按钮打开文件选择
+        launchBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        // 处理文件选择
+        fileInput.addEventListener('change', async (e) => {
+            if (e.target.files.length === 0) return;
+            
+            const file = e.target.files[0];
+            statusDisplay.textContent = '正在处理文件...';
+            statusDisplay.style.display = 'block';
+            launchBtn.disabled = true;
+
+            try {
+                // 根据文件类型处理
+                if (file.name.endsWith('.js')) {
+                    // 处理单个核心文件
+                    const coreContent = await readFileAsText(file);
+                    launchGameInNewWindow({ core: coreContent });
+                } 
+                else if (file.name.endsWith('.zip')) {
+                    // 处理ZIP实例包
+                    const zipContent = await readFileAsArrayBuffer(file);
+                    const files = await parseZipFile(zipContent);
+                    
+                    // 验证ZIP内容
+                    if (!files.core) throw new Error('ZIP包中未找到 core.js');
+                    
+                    launchGameInNewWindow({
+                        core: files.core,
+                        inject: files.inject // 可选
+                    });
+                }
+                else {
+                    throw new Error('不支持的文件类型，仅支持 .js 和 .zip');
+                }
+
+                statusDisplay.textContent = '游戏已在新窗口启动';
+                setTimeout(resetUI, 2000);
+
+            } catch (error) {
+                alert('加载失败: ' + error.message);
+                console.error('错误详情:', error);
+                resetUI();
+            }
+        });
+
+        // 读取文件为文本
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsText(file);
+            });
+        }
+
+        // 读取文件为ArrayBuffer
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // 解析ZIP文件
+        async function parseZipFile(arrayBuffer) {
+            // 动态加载ZIP解析库
+            if (!window.JSZip) {
+                await new Promise((resolve, reject) => {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                });
+            }
+
+            const zip = await JSZip.loadAsync(arrayBuffer);
+            const result = {};
+
+            // 查找核心文件和注入文件
+            for (const [name, file] of Object.entries(zip.files)) {
+                const lowerName = name.toLowerCase();
+                if (lowerName.endsWith('core.js')) {
+                    result.core = await file.async('text');
+                } else if (lowerName.endsWith('inject.js')) {
+                    result.inject = await file.async('text');
+                }
+            }
+
+            return result;
+        }
+
+        // 在新窗口启动游戏
+        function launchGameInNewWindow({ core, inject }) {
+            // 创建新窗口
+            const gameWindow = window.open('', '_blank');
+            if (!gameWindow) {
+                throw new Error('弹出窗口被阻止，请允许弹出窗口后重试');
+            }
+
+            // 构建游戏页面内容
+            const gameHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>EaglercraftX 游戏</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
+        #game-container { width: 100vw; height: 100vh; display: block; }
+        .status {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: Arial, sans-serif;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="status">正在初始化游戏...</div>
+    <div id="game-container"></div>
+
+    <script>
+        // 游戏配置
+        window.eaglercraftXOpts = {
+            container: "game-container",
+            worldsDB: "eagler_worlds",
+            enableSound: true,
+            width: window.innerWidth,
+            height: window.innerHeight
+        };
+
+        // 获取游戏容器
+        const gameContainer = document.getElementById('game-container');
+        
+        // 重写选择器（关键修复）
+        function overrideSelectors() {
+            const originalQ = document.querySelector;
+            const originalG = document.getElementById;
+            
+            document.querySelector = function(selector) {
+                return document.getElementById('game-container') || document.body;
+            };
+            
+            document.getElementById = function(id) {
+                return id === 'game-container' ? gameContainer : document.body;
+            };
+        }
+
+        // 执行选择器重写
+        overrideSelectors();
+
+        // 加载注入脚本（如果存在）
+        ${inject ? `(function() { ${inject} })();` : ''}
+
+        // 加载游戏核心
+        (function() { ${core} })();
+
+        // 初始化游戏
+        if (window.initEaglercraftX) {
+            try {
+                window.initEaglercraftX({
+                    ...window.eaglercraftXOpts,
+                    container: gameContainer
+                });
+
+                // 窗口大小调整
+                window.addEventListener('resize', () => {
+                    if (window.eaglercraftX && window.eaglercraftX.resize) {
+                        window.eaglercraftX.resize(window.innerWidth, window.innerHeight);
+                    }
+                });
+
+                document.querySelector('.status').style.display = 'none';
+            } catch (err) {
+                document.querySelector('.status').textContent = '初始化失败: ' + err.message;
+                console.error(err);
+            }
+        } else {
+            document.querySelector('.status').textContent = '未找到初始化函数 initEaglercraftX';
+        }
+    <\/script>
+</body>
+</html>`;
+
+            // 写入并关闭新窗口文档
+            gameWindow.document.write(gameHtml);
+            gameWindow.document.close();
+        }
+
+        // 重置界面
+        function resetUI() {
+            statusDisplay.style.display = 'none';
+            fileInput.value = '';
+            launchBtn.disabled = false;
+        }
+    </script>
+</body>
+</html>
